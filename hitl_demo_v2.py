@@ -6,125 +6,12 @@ st.set_page_config(page_title="Human-in-the-Loop Decision Demo", layout="wide")
 
 
 # =========================================================
-# Data generation
+# Helpers
 # =========================================================
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
 
-def generate_data(n=24, seed=42):
-    rng = np.random.default_rng(seed)
-
-    # 0 = standard cases
-    # 1 = harder subgroup where the model is less reliable
-    subgroup = rng.binomial(1, 0.30, n)
-
-    ages = []
-    prior_flags = []
-    amount = []
-    account_age_days = []
-    overseas = []
-    hidden_note = []
-    hidden_signal = []
-    true_label = []
-    model_score = []
-
-    positive_notes = [
-        "System Investigation Note: Multiple failed CVV attempts in logs",
-        "System Investigation Note: Card reported stolen earlier today",
-        "System Investigation Note: Shipping address changed 15 minutes ago",
-        "System Investigation Note: Device fingerprint linked to prior fraud cases",
-        "System Investigation Note: Billing ZIP mismatch detected during verification"
-    ]
-
-    negative_notes = [
-        "System Investigation Note: Customer confirmed travel through mobile app",
-        "System Investigation Note: Purchase made from previously trusted device",
-        "System Investigation Note: Customer responded YES to verification text",
-        "System Investigation Note: Merchant is on recurring subscription whitelist",
-        "System Investigation Note: Transaction matches the customer's normal travel pattern"
-    ]
-
-    neutral_notes = [
-        "System Investigation Note: No additional signals found",
-        "System Investigation Note: Manual review history unavailable",
-        "System Investigation Note: Device metadata incomplete",
-        "System Investigation Note: No recent account changes detected"
-    ]
-
-    for i in range(n):
-        # Observable variables
-        a = int(rng.integers(18, 80))
-        pf = int(rng.integers(0, 6))
-        amt = round(float(rng.uniform(20, 5000)), 2)
-        acc_age = int(rng.integers(5, 3650))
-        ov = int(rng.binomial(1, 0.20))
-
-        ages.append(a)
-        prior_flags.append(pf)
-        amount.append(amt)
-        account_age_days.append(acc_age)
-        overseas.append(ov)
-
-        # Hidden signal only visible to the human reviewer
-        note_type = rng.choice(["positive", "negative", "neutral"], p=[0.22, 0.22, 0.56])
-
-        if note_type == "positive":
-            note = rng.choice(positive_notes)
-            signal = 1
-        elif note_type == "negative":
-            note = rng.choice(negative_notes)
-            signal = -1
-        else:
-            note = rng.choice(neutral_notes)
-            signal = 0
-
-        hidden_note.append(note)
-        hidden_signal.append(signal)
-
-        # Observable risk pattern
-        observable_risk = (
-            0.00010 * amt
-            + 0.22 * pf
-            + 0.75 * ov
-            - 0.00045 * acc_age
-            + 0.002 * max(0, a - 65)   # tiny age-based effect for realism
-        )
-
-        # True risk depends strongly on hidden info
-        # The model only partially captures that hidden info
-        subgroup_noise = 0.55 if subgroup[i] == 1 else 0.30
-
-        latent_true = observable_risk + 1.25 * signal + rng.normal(0, subgroup_noise)
-        prob_true = sigmoid(latent_true)
-        y = int(rng.binomial(1, prob_true))
-        true_label.append(y)
-
-        # Model sees observable features well, but hidden signal only weakly
-        latent_model = observable_risk + 0.20 * signal + rng.normal(0, 0.45 if subgroup[i] == 1 else 0.28)
-        score = float(sigmoid(latent_model))
-        model_score.append(round(score, 3))
-
-    df = pd.DataFrame({
-        "case_id": np.arange(1, n + 1),
-        "subgroup": subgroup,
-        "true_label": true_label,
-        "model_score": model_score,
-        "age": ages,
-        "prior_flags": prior_flags,
-        "amount": amount,
-        "account_age_days": account_age_days,
-        "overseas": overseas,
-        "hidden_note": hidden_note,
-        "hidden_signal": hidden_signal
-    })
-
-    return df
-
-
-# =========================================================
-# Evaluation helpers
-# =========================================================
 def evaluate(preds, truth):
     preds = np.array(preds)
     truth = np.array(truth)
@@ -177,7 +64,168 @@ def format_case_summary(row):
 
 
 # =========================================================
-# App header
+# Data generation
+# =========================================================
+def generate_data(n=24, seed=42):
+    rng = np.random.default_rng(seed)
+
+    subgroup = rng.binomial(1, 0.30, n)  # harder subgroup where model is less reliable
+
+    ages = []
+    prior_flags = []
+    amount = []
+    account_age_days = []
+    overseas = []
+    hidden_note = []
+    hidden_signal = []
+    true_label = []
+    model_score = []
+
+    # Positive notes = stronger evidence of fraud / risk
+    positive_notes = [
+        "System Investigation Note: Multiple failed CVV attempts in logs",
+        "System Investigation Note: Card reported stolen earlier today",
+        "System Investigation Note: Shipping address changed 15 minutes ago",
+        "System Investigation Note: Device fingerprint linked to prior fraud cases",
+        "System Investigation Note: Billing ZIP mismatch detected during verification",
+        "System Investigation Note: Several failed password attempts preceded this purchase",
+        "System Investigation Note: Transaction originated from an IP address linked to prior fraud alerts",
+        "System Investigation Note: Account email was changed within the last hour",
+        "System Investigation Note: Phone number on file was updated immediately before checkout",
+        "System Investigation Note: Card security checks failed twice before final authorization",
+        "System Investigation Note: Unusual device-browser combination compared with account history",
+        "System Investigation Note: Merchant category matches recent fraud pattern watchlist",
+        "System Investigation Note: Velocity checks show multiple declined attempts before approval",
+        "System Investigation Note: Shipping and billing names do not match account records",
+        "System Investigation Note: Login occurred from a new country shortly before purchase",
+        "System Investigation Note: Two-factor authentication was bypassed after repeated retries",
+        "System Investigation Note: Purchase followed a password reset from an unfamiliar device",
+        "System Investigation Note: Account recovery was triggered earlier today",
+        "System Investigation Note: Card was used at multiple merchants within a very short window",
+        "System Investigation Note: Device ID overlaps with accounts previously closed for fraud"
+    ]
+
+    # Negative notes = evidence supporting legitimacy / safety
+    negative_notes = [
+        "System Investigation Note: Customer confirmed travel through mobile app",
+        "System Investigation Note: Purchase made from previously trusted device",
+        "System Investigation Note: Customer responded YES to verification text",
+        "System Investigation Note: Merchant is on recurring subscription whitelist",
+        "System Investigation Note: Transaction matches the customer's normal travel pattern",
+        "System Investigation Note: Same merchant used successfully by this customer in prior months",
+        "System Investigation Note: Device has been associated with verified account activity for over a year",
+        "System Investigation Note: Customer recently notified bank of planned international travel",
+        "System Investigation Note: Purchase matches recurring monthly spending pattern",
+        "System Investigation Note: Shipping address matches long-standing saved address",
+        "System Investigation Note: Verified mobile push approval received before checkout",
+        "System Investigation Note: Merchant is on customer favorites list",
+        "System Investigation Note: Customer support note confirms this purchase category is expected",
+        "System Investigation Note: Geolocation is consistent with customer's recent confirmed activity",
+        "System Investigation Note: Transaction made from customer’s usual home network",
+        "System Investigation Note: Purchase amount aligns with normal paycheck-cycle spending",
+        "System Investigation Note: Customer recently added this merchant to approved vendors",
+        "System Investigation Note: Device and browser match most recent successful login session",
+        "System Investigation Note: Travel itinerary on file supports current transaction location",
+        "System Investigation Note: Previous manual review cleared a nearly identical purchase"
+    ]
+
+    # Neutral notes = ambiguous / incomplete / mixed signals
+    neutral_notes = [
+        "System Investigation Note: No additional signals found",
+        "System Investigation Note: Manual review history unavailable",
+        "System Investigation Note: Device metadata incomplete",
+        "System Investigation Note: No recent account changes detected",
+        "System Investigation Note: Merchant history is limited for this account",
+        "System Investigation Note: Customer profile has no recent analyst comments",
+        "System Investigation Note: Fraud monitoring logs are partially unavailable",
+        "System Investigation Note: Device risk service returned inconclusive result",
+        "System Investigation Note: Verification event timing could not be confirmed",
+        "System Investigation Note: Purchase context appears mixed across available systems",
+        "System Investigation Note: Network reputation signal unavailable at decision time",
+        "System Investigation Note: Prior transaction history is sparse",
+        "System Investigation Note: Merchant risk feed returned no actionable flags",
+        "System Investigation Note: Customer response history is unavailable",
+        "System Investigation Note: Session logs are incomplete for this transaction",
+        "System Investigation Note: Address consistency check returned an inconclusive result",
+        "System Investigation Note: Historical baseline could not be computed reliably",
+        "System Investigation Note: Limited cross-device history available",
+        "System Investigation Note: Authentication logs show no clear anomaly",
+        "System Investigation Note: Internal monitoring systems returned mixed signals"
+    ]
+
+    for i in range(n):
+        # Observable features
+        a = int(rng.integers(18, 80))
+        pf = int(rng.integers(0, 6))
+        amt = round(float(rng.uniform(20, 5000)), 2)
+        acc_age = int(rng.integers(5, 3650))
+        ov = int(rng.binomial(1, 0.20))
+
+        ages.append(a)
+        prior_flags.append(pf)
+        amount.append(amt)
+        account_age_days.append(acc_age)
+        overseas.append(ov)
+
+        # Hidden human-only note type
+        note_type = rng.choice(["positive", "negative", "neutral"], p=[0.24, 0.24, 0.52])
+
+        if note_type == "positive":
+            note = rng.choice(positive_notes)
+            signal = 1
+        elif note_type == "negative":
+            note = rng.choice(negative_notes)
+            signal = -1
+        else:
+            note = rng.choice(neutral_notes)
+            signal = 0
+
+        hidden_note.append(note)
+        hidden_signal.append(signal)
+
+        # Observable risk
+        observable_risk = (
+            0.00010 * amt
+            + 0.22 * pf
+            + 0.75 * ov
+            - 0.00045 * acc_age
+            + 0.002 * max(0, a - 65)
+        )
+
+        # Harder subgroup has more noise
+        subgroup_noise_true = 0.55 if subgroup[i] == 1 else 0.30
+        subgroup_noise_model = 0.45 if subgroup[i] == 1 else 0.28
+
+        # Truth depends strongly on hidden signal
+        latent_true = observable_risk + 1.25 * signal + rng.normal(0, subgroup_noise_true)
+        prob_true = sigmoid(latent_true)
+        y = int(rng.binomial(1, prob_true))
+        true_label.append(y)
+
+        # Model only weakly captures the hidden signal
+        latent_model = observable_risk + 0.20 * signal + rng.normal(0, subgroup_noise_model)
+        score = float(sigmoid(latent_model))
+        model_score.append(round(score, 3))
+
+    df = pd.DataFrame({
+        "case_id": np.arange(1, n + 1),
+        "subgroup": subgroup,
+        "true_label": true_label,
+        "model_score": model_score,
+        "age": ages,
+        "prior_flags": prior_flags,
+        "amount": amount,
+        "account_age_days": account_age_days,
+        "overseas": overseas,
+        "hidden_note": hidden_note,
+        "hidden_signal": hidden_signal
+    })
+
+    return df
+
+
+# =========================================================
+# Page header
 # =========================================================
 st.title("Designing a Human-in-the-Loop Decision System")
 st.subheader("When should a model decide on its own, and when should a human step in?")
@@ -200,10 +248,22 @@ In this demo, you will compare two systems:
 - **Human-in-the-loop system:** the model handles clear cases, and **you review the uncertain ones**
 """)
 
+st.markdown("""
+### How to use this demo
+
+1. Click **Generate new simulated cases**.
+2. Review the transactions marked **Needs Human Review**.
+3. Use the investigation notes to decide whether to allow or block each case.
+4. Compare the results between:
+   - **Model decides everything**
+   - **Human-in-the-loop system**
+5. Reveal the true outcomes to see which approach performed better.
+""")
+
 st.info("""
-In this version of the demo, the human reviewer sees an additional investigation note
-that the model does not fully use. This reflects a key principle of human-in-the-loop design:
-humans add value only when they have unique information or judgment that the model lacks.
+In this demo, the human reviewer sees an additional investigation note that the model does not fully incorporate into its prediction.
+
+This simulates real-world systems where human analysts may have access to contextual information that is difficult to encode directly in machine learning features.
 """)
 
 with st.expander("What are we simulating?"):
@@ -220,21 +280,24 @@ Each case represents a fictional transaction with features such as:
 
 The app also simulates a hidden harder-to-classify subgroup where the model is less reliable.
 
-Most importantly, the human reviewer gets access to an extra **investigation note** that the model
-does not fully use. This means the human has a real chance to improve decisions on borderline cases.
+Most importantly, the human reviewer gets access to an extra **investigation note** that the model does not fully use. This means the human has a real chance to improve decisions on borderline cases.
 """)
 
-with st.expander("Why did the human reviewer struggle in the first version?"):
+with st.expander("Why include a human reviewer at all?"):
     st.markdown("""
-In the first version of the simulation, the human reviewer often could not outperform the model,
-because the human was not given additional contextual information.
+Human reviewers can add value in situations where a model is uncertain or missing context.
 
-That teaches an important design lesson:
+In this simulation, the reviewer receives an **additional investigation note** that the model does not fully incorporate into its prediction.
 
-> **A human without a unique information advantage is just a slower, more expensive, and often less consistent version of the model.**
+This represents information that may exist in real systems but is difficult to encode directly in model features.
 
-A human-in-the-loop system only adds value when the reviewer has information or judgment
-that the model does not fully capture.
+Examples include:
+- recent security alerts
+- manual investigation logs
+- customer confirmations
+- device fingerprint intelligence
+
+Human-in-the-loop systems work best when humans have **contextual information or judgment that the model does not fully capture**.
 """)
 
 with st.expander("What should you look for in the results?"):
@@ -290,7 +353,7 @@ df = st.session_state.df.copy()
 # Model-only baseline
 df["model_only_pred"] = (df["model_score"] >= 0.5).astype(int)
 
-# Human-in-the-loop routing
+# HITL routing
 df["needs_review"] = ((df["model_score"] > low_thr) & (df["model_score"] < high_thr)).astype(int)
 
 
@@ -304,7 +367,7 @@ def auto_hitl_decision(score):
 
 df["hitl_auto_pred"] = df["model_score"].apply(auto_hitl_decision)
 
-# Friendly display table (no hidden note shown here)
+# Friendly display table (without hidden note)
 display_df = df[[
     "case_id", "amount", "age", "prior_flags", "account_age_days", "overseas", "model_score", "needs_review"
 ]].copy()
@@ -331,6 +394,7 @@ The model risk score is shown for every case.
 Cases in the uncertain middle range are routed to **human review**.
 """)
 st.dataframe(display_df, use_container_width=True)
+
 
 # =========================================================
 # Human review section
@@ -365,6 +429,7 @@ else:
 
             human_decisions[int(row["case_id"])] = 0 if decision == "Allow transaction" else 1
 
+
 # =========================================================
 # Final HITL predictions
 # =========================================================
@@ -378,6 +443,7 @@ for _, row in df.iterrows():
         hitl_preds.append(human_decisions.get(case_id, 0))
 
 df["hitl_pred"] = hitl_preds
+
 
 # =========================================================
 # Results
@@ -454,6 +520,7 @@ A human-in-the-loop system is only worthwhile when the improvement in decisions
 is large enough to offset that overhead.
 """)
 
+
 # =========================================================
 # Reveal outcomes
 # =========================================================
@@ -487,8 +554,9 @@ if reveal:
 else:
     st.dataframe(case_results.drop(columns=["True Outcome"]), use_container_width=True)
 
+
 # =========================================================
-# Teaching takeaway
+# Final takeaway
 # =========================================================
 st.subheader("Main lesson")
 st.markdown("""
@@ -506,9 +574,9 @@ It is also:
 st.markdown("""
 Two important lessons from this simulation are:
 
-> **A human without a unique information advantage is just a slower, more expensive, and often less consistent version of the model.**
+**1. Human oversight only adds value when the human has meaningful context or judgment beyond the model.**
 
-and
+**2. Human review introduces cost and delay, so the benefit must outweigh that overhead.**
 
-> **In my first version of the simulation, the human reviewer often could not outperform the model, because the human was not given additional contextual information. That taught me an important design lesson: human-in-the-loop systems only add value when humans have access to information or judgment that the model does not fully capture.**
+Effective human-AI systems therefore focus on **routing the right decisions to the right decision maker**.
 """)
