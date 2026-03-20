@@ -210,16 +210,3 @@ if st.checkbox("Show the actual ground truth for all cases"):
     reveal_df = df[["case_id", "model_score", "model_only_pred", "hitl_pred", "true_label"]].copy()
     reveal_df = reveal_df.rename(columns={"true_label": "Actual Fraud?"})
     st.dataframe(reveal_df, use_container_width=True, hide_index=True)
-
-# =========================================================
-# Final Takeaway
-# =========================================================
-st.divider()
-st.subheader("Main Lesson")
-st.markdown("""
-A model can look strong on average and still be risky if it decides **every case by itself**. 
-
-Effective human-AI systems focus on **routing the right decisions to the right decision maker**. In this simulation:
-- The **Model** handles the high-volume, obvious cases.
-- The **Human** handles the low-volume, high-ambiguity cases where external context (notes) changes the outcome.
-""")
